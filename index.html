@@ -16,6 +16,12 @@
     <meta name="twitter:title" content="Atlas de Políticas Municipales" />
     <meta name="twitter:description" content="Políticas públicas municipales de todo el mundo, ordenadas por temática, con nivel de evidencia honesto para cada resultado citado." />
     <meta name="twitter:image" content="og-image.png" />
+    <!-- amCharts 5 (globo 3D interactivo del mapa). Necesita conexión a internet
+         la primera vez que se carga la página, a diferencia del resto del sitio. -->
+    <script src="https://cdn.amcharts.com/lib/5/index.js"></script>
+    <script src="https://cdn.amcharts.com/lib/5/map.js"></script>
+    <script src="https://cdn.amcharts.com/lib/5/geodata/worldLow.js"></script>
+    <script src="https://cdn.amcharts.com/lib/5/themes/Animated.js"></script>
     <script>
 
 // --- React y ReactDOM empaquetados localmente (sin depender de ningún CDN externo) ---
@@ -23362,6 +23368,215 @@ function formatPoblacion(n) {
     }
     return n + " hab.";
 }
+// Globo 3D interactivo (amCharts 5) que reemplaza al mapa plano: mismos datos
+// (políticas filtradas, colores por categoría, apertura del popup al tocar un
+// punto) pero con rotación automática, zoom y países resaltados al tocarlos.
+function GlobeView(props) {
+    const filtered = props.filtered, selectedId = props.selectedId, setSelectedId = props.setSelectedId,
+        catById = props.catById, CATEGORIES = props.CATEGORIES, CITY_COORDS = props.CITY_COORDS,
+        unmapped = props.unmapped;
+    const divRef = React.useRef(null);
+    const amRef = React.useRef({});
+    const dragRef = React.useRef(null);
+    useEffect(() => {
+        if (!window.am5 || !window.am5map || !window.am5geodata_worldLow) {
+            amRef.current.failed = true;
+            return;
+        }
+        const root = am5.Root.new(divRef.current);
+        root._logo && root._logo.dispose();
+        root.setThemes([am5themes_Animated.new(root)]);
+        const INK = 0x1B2A3D, PAPER = 0xEEF2EA, GOLD = 0xC08A2E, COUNTRY = 0x33496A, COUNTRY_HOVER = 0x45608A;
+        const chart = root.container.children.push(am5map.MapChart.new(root, {
+            panX: "rotateX",
+            panY: "rotateY",
+            projection: am5map.geoOrthographic(),
+            wheelX: "none",
+            wheelY: "zoom",
+            maxZoomLevel: 32,
+            minZoomLevel: 0.5,
+            paddingTop: 0, paddingBottom: 0, paddingLeft: 0, paddingRight: 0,
+        }));
+        const grain = am5.GrainPattern.new(root, { maxOpacity: 0.07, color: am5.color(0x000000) });
+        chart.set("background", am5.Rectangle.new(root, {
+            fill: am5.color(INK), fillOpacity: 1, fillPattern: grain,
+        }));
+        const backgroundSeries = chart.series.unshift(am5map.MapPolygonSeries.new(root, {}));
+        backgroundSeries.mapPolygons.template.setAll({
+            fill: am5.color(PAPER), fillOpacity: 0.06, strokeOpacity: 0,
+        });
+        backgroundSeries.data.push({ geometry: am5map.getGeoRectangle(90, 180, -90, -180) });
+        const graticuleSeries = chart.series.push(am5map.GraticuleSeries.new(root, { step: 10 }));
+        graticuleSeries.mapLines.template.setAll({ stroke: am5.color(PAPER), strokeOpacity: 0.08 });
+        const polygonSeries = chart.series.push(am5map.MapPolygonSeries.new(root, {
+            geoJSON: am5geodata_worldLow,
+        }));
+        polygonSeries.mapPolygons.template.setAll({
+            tooltipText: "{name}",
+            interactive: true,
+            fill: am5.color(COUNTRY),
+            stroke: am5.color(INK),
+            strokeWidth: 0.6,
+            toggleKey: "active",
+            cursorOverStyle: "pointer",
+        });
+        polygonSeries.mapPolygons.template.states.create("hover", { fill: am5.color(COUNTRY_HOVER) });
+        polygonSeries.mapPolygons.template.states.create("active", { fill: am5.color(GOLD), fillOpacity: 1 });
+        polygonSeries.mapPolygons.template.on("active", (active, target) => {
+            if (active) {
+                polygonSeries.mapPolygons.each((pg) => {
+                    if (pg !== target && pg.get("active"))
+                        pg.set("active", false);
+                });
+            }
+        });
+        const zoomControl = chart.set("zoomControl", am5map.ZoomControl.new(root, {}));
+        [zoomControl.plusButton, zoomControl.minusButton, zoomControl.homeButton].forEach((btn) => {
+            if (!btn) return;
+            btn.setAll({ width: 30, height: 30 });
+            const bg = btn.get("background");
+            if (bg) {
+                bg.setAll({ fill: am5.color(0x4A4A4A), fillOpacity: 0.85, strokeOpacity: 0 });
+                bg.states.create("hover", { fill: am5.color(0x666666) });
+            }
+            const icon = btn.get("icon");
+            if (icon) icon.setAll({ stroke: am5.color(PAPER) });
+        });
+        let rotationAnim = null;
+        function startRotation() {
+            rotationAnim = chart.animate({
+                key: "rotationX",
+                from: chart.get("rotationX", 0),
+                to: chart.get("rotationX", 0) + 360,
+                duration: 30000,
+                loop: true,
+            });
+        }
+        function stopRotation() {
+            if (rotationAnim) {
+                rotationAnim.stop();
+                rotationAnim = null;
+            }
+        }
+        startRotation();
+        const el = divRef.current;
+        function onPointerDownStop() { stopRotation(); }
+        el.addEventListener("pointerdown", onPointerDownStop);
+        function onDblClick(e) {
+            chart.zoomIn();
+        }
+        el.addEventListener("dblclick", onDblClick);
+        zoomControl.homeButton.events.on("click", () => {
+            stopRotation();
+            chart.goHome();
+        });
+        // Shift + arrastrar: dibuja un rectángulo y hace zoom a esa zona geográfica.
+        let selectionBox = null;
+        function geoFromClient(clientX, clientY) {
+            const rect = el.getBoundingClientRect();
+            const point = { x: clientX - rect.left, y: clientY - rect.top };
+            try {
+                return chart.invert(point);
+            } catch (err) {
+                return null;
+            }
+        }
+        function onShiftDown(e) {
+            if (!e.shiftKey) return;
+            stopRotation();
+            const rect = el.getBoundingClientRect();
+            selectionBox = document.createElement("div");
+            selectionBox.className = "atlas-globe-selection";
+            selectionBox.style.left = (e.clientX - rect.left) + "px";
+            selectionBox.style.top = (e.clientY - rect.top) + "px";
+            el.appendChild(selectionBox);
+            dragRef.current = { startX: e.clientX, startY: e.clientY };
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        function onShiftMove(e) {
+            if (!selectionBox || !dragRef.current) return;
+            const rect = el.getBoundingClientRect();
+            const x1 = dragRef.current.startX - rect.left, y1 = dragRef.current.startY - rect.top;
+            const x2 = e.clientX - rect.left, y2 = e.clientY - rect.top;
+            selectionBox.style.left = Math.min(x1, x2) + "px";
+            selectionBox.style.top = Math.min(y1, y2) + "px";
+            selectionBox.style.width = Math.abs(x2 - x1) + "px";
+            selectionBox.style.height = Math.abs(y2 - y1) + "px";
+        }
+        function onShiftUp(e) {
+            if (!selectionBox || !dragRef.current) return;
+            const g1 = geoFromClient(dragRef.current.startX, dragRef.current.startY);
+            const g2 = geoFromClient(e.clientX, e.clientY);
+            if (g1 && g2) {
+                try {
+                    chart.zoomToGeoBounds({
+                        left: Math.min(g1.longitude, g2.longitude),
+                        right: Math.max(g1.longitude, g2.longitude),
+                        top: Math.max(g1.latitude, g2.latitude),
+                        bottom: Math.min(g1.latitude, g2.latitude),
+                    });
+                } catch (err) { /* no-op si la API difiere */ }
+            }
+            selectionBox.remove();
+            selectionBox = null;
+            dragRef.current = null;
+        }
+        el.addEventListener("pointerdown", onShiftDown);
+        window.addEventListener("pointermove", onShiftMove);
+        window.addEventListener("pointerup", onShiftUp);
+        const pointSeries = chart.series.push(am5map.MapPointSeries.new(root, {}));
+        pointSeries.bullets.push((root2, series, dataItem) => {
+            const d = dataItem.dataContext;
+            const circle = am5.Circle.new(root2, {
+                radius: d.selected ? 7 : 5,
+                fill: am5.color(d.color),
+                stroke: am5.color(PAPER),
+                strokeWidth: 1.2,
+                tooltipText: "{title}",
+                cursorOverStyle: "pointer",
+                interactive: true,
+            });
+            circle.events.on("click", (e) => {
+                e.target && e.originalEvent && e.originalEvent.stopPropagation && e.originalEvent.stopPropagation();
+                setSelectedId(d.id);
+            });
+            return am5.Bullet.new(root2, { sprite: circle });
+        });
+        amRef.current = { root, chart, pointSeries, stopRotation };
+        return () => {
+            el.removeEventListener("pointerdown", onPointerDownStop);
+            el.removeEventListener("dblclick", onDblClick);
+            el.removeEventListener("pointerdown", onShiftDown);
+            window.removeEventListener("pointermove", onShiftMove);
+            window.removeEventListener("pointerup", onShiftUp);
+            root.dispose();
+        };
+    }, []);
+    useEffect(() => {
+        const pointSeries = amRef.current.pointSeries;
+        if (!pointSeries) return;
+        const data = filtered
+            .filter((p) => CITY_COORDS[p.ciudad])
+            .map((p) => {
+            const coords = CITY_COORDS[p.ciudad];
+            const cat = catById[p.categoria] || CATEGORIES[0];
+            return {
+                id: p.id,
+                title: p.ciudad + (p.pais ? ", " + p.pais : "") + " — " + p.titulo,
+                color: cat.color,
+                selected: p.id === selectedId,
+                geometry: { type: "Point", coordinates: [coords[1], coords[0]] },
+            };
+        });
+        pointSeries.data.setAll(data);
+    }, [filtered, selectedId]);
+    return (React.createElement("div", { className: "atlas-map-wrap atlas-globe-wrap" },
+        React.createElement("div", { ref: divRef, className: "atlas-globe-canvas" }),
+        React.createElement("div", { className: "atlas-map-overlay-caption" },
+            React.createElement("p", { className: "atlas-map-caption" }, "Arrastr\u00E1 para rotar el globo. Rueda o doble clic para acercar. Shift + arrastrar para hacer zoom a una zona. Toc\u00E1 un punto para ver el detalle."),
+            unmapped.length > 0 && (React.createElement("p", { className: "atlas-map-unmapped" }, "Sin coordenadas: " + unmapped.map((p) => p.ciudad).join(", ") + ".")))));
+}
 function App() {
     var _a;
     const policies = POLICIES;
@@ -23874,6 +24089,31 @@ function App() {
           max-height: none;
           width: 100%;
         }
+        .atlas-globe-wrap { padding: 0; }
+        .atlas-globe-canvas {
+          flex: 1;
+          min-height: 0;
+          width: 100%;
+          border-radius: 4px;
+          overflow: hidden;
+          background: #1B2A3D;
+          touch-action: none;
+        }
+        .atlas-globe-selection {
+          position: absolute;
+          border: 1px dashed var(--gold);
+          background: rgba(192, 138, 46, 0.15);
+          pointer-events: none;
+          z-index: 5;
+        }
+        .atlas-globe-wrap .atlas-map-overlay-caption {
+          background: rgba(27, 42, 61, 0.85);
+          border-color: rgba(238, 242, 234, 0.25);
+        }
+        .atlas-globe-wrap .atlas-map-caption,
+        .atlas-globe-wrap .atlas-map-unmapped {
+          color: #D7DEE8;
+        }
         .atlas-world-paths path {
           fill: #C9D2BE;
           stroke: #AEB89E;
@@ -24282,37 +24522,9 @@ function App() {
                         React.createElement("span", { className: "name" }, cat.label),
                         React.createElement("span", { className: "count" }, counts[cat.id] || 0)));
                 })),
-            React.createElement("main", { className: "atlas-main" + (viewMode === "map" ? " atlas-main-map" : "") }, filtered.length === 0 ? (React.createElement("div", { className: "atlas-empty" }, "No hay pol\u00EDticas que coincidan con esa b\u00FAsqueda. Prob\u00E1 con otro t\u00E9rmino o cambi\u00E1 los filtros.")) : viewMode === "map" ? (React.createElement("div", { className: "atlas-map-wrap" },
-                React.createElement("div", { className: "atlas-map-zoom-controls" },
-                    React.createElement("button", { type: "button", onClick: () => zoomAt(1 / 1.4), title: "Acercar" },
-                        React.createElement(Plus, { size: 16 })),
-                    React.createElement("button", { type: "button", onClick: () => zoomAt(1.4), title: "Alejar" },
-                        React.createElement(Minus, { size: 16 })),
-                    React.createElement("button", { type: "button", onClick: resetView, title: "Reiniciar vista" },
-                        React.createElement(RotateCcw, { size: 16 }))),
-                React.createElement("svg", { ref: mapSvgRef, className: "atlas-map-svg", viewBox: `${box.x} ${box.y} ${box.w} ${box.h}`, onClick: () => setSelectedId(null), onPointerDown: handlePointerDown, onPointerMove: handlePointerMove, onPointerUp: handlePointerUp, onPointerLeave: handlePointerUp, style: { cursor: dragging ? "grabbing" : "grab" } },
-                    React.createElement("rect", { x: 0, y: 0, width: MAP_W, height: MAP_H, fill: "#E4E9DE" }),
-                    React.createElement("g", { className: "atlas-world-paths", dangerouslySetInnerHTML: { __html: WORLD_MAP_PATHS } }),
-                    pins.map(({ policy: p, x, y }) => {
-                        const cat = catById[p.categoria] || CATEGORIES[0];
-                        const isSelected = p.id === selectedId;
-                        const r = (isSelected ? 8 : 5.5) * Math.min(1.6, Math.max(0.5, box.w / MAP_W));
-                        return (React.createElement("circle", { key: p.id, className: "atlas-map-pin", cx: x, cy: y, r: r, fill: cat.color, onClick: (e) => {
-                                e.stopPropagation();
-                                setSelectedId(p.id);
-                            } },
-                            React.createElement("title", null,
-                                p.ciudad,
-                                p.pais ? `, ${p.pais}` : "",
-                                " \u2014 ",
-                                p.titulo)));
-                    })),
-                React.createElement("div", { className: "atlas-map-overlay-caption" },
-                    React.createElement("p", { className: "atlas-map-caption" }, "Rueda del mouse o pellizco para zoom, arrastrar para mover, tocar un punto para ver el detalle."),
-                    unmapped.length > 0 && (React.createElement("p", { className: "atlas-map-unmapped" },
-                        "Sin coordenadas: ",
-                        unmapped.map((p) => p.ciudad).join(", "),
-                        "."))))) : (React.createElement("div", { className: "atlas-grid" }, filtered.map((p) => {
+            React.createElement("main", { className: "atlas-main" + (viewMode === "map" ? " atlas-main-map" : "") }, filtered.length === 0 ? (React.createElement("div", { className: "atlas-empty" }, "No hay pol\u00EDticas que coincidan con esa b\u00FAsqueda. Prob\u00E1 con otro t\u00E9rmino o cambi\u00E1 los filtros.")) : viewMode === "map" ? (
+                React.createElement(GlobeView, { filtered: filtered, selectedId: selectedId, setSelectedId: setSelectedId, catById: catById, CATEGORIES: CATEGORIES, CITY_COORDS: CITY_COORDS, unmapped: unmapped })
+            ) : (React.createElement("div", { className: "atlas-grid" }, filtered.map((p) => {
                 var _a;
                 const cat = catById[p.categoria] || CATEGORIES[0];
                 const CatIcon = cat.icon;
