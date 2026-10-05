@@ -16,8 +16,6 @@
     <meta name="twitter:title" content="Atlas de Políticas Municipales" />
     <meta name="twitter:description" content="Políticas públicas municipales de todo el mundo, ordenadas por temática, con nivel de evidencia honesto para cada resultado citado." />
     <meta name="twitter:image" content="og-image.png" />
-    <!-- amCharts 5 (globo 3D interactivo del mapa). Necesita conexión a internet
-         la primera vez que se carga la página, a diferencia del resto del sitio. -->
     <script src="https://cdn.amcharts.com/lib/5/index.js"></script>
     <script src="https://cdn.amcharts.com/lib/5/map.js"></script>
     <script src="https://cdn.amcharts.com/lib/5/geodata/worldLow.js"></script>
@@ -23371,6 +23369,58 @@ function formatPoblacion(n) {
 // Globo 3D interactivo (amCharts 5) que reemplaza al mapa plano: mismos datos
 // (políticas filtradas, colores por categoría, apertura del popup al tocar un
 // punto) pero con rotación automática, zoom y países resaltados al tocarlos.
+// Nombres de países en español para el globo, por código ISO 3166-1 alfa-2
+// (el formato que usa el geoJSON de amCharts). Las Islas Malvinas se agregan
+// aparte, con su propio polígono, más abajo en GlobeView.
+const ES_COUNTRY_NAMES = {
+  AF: "Afganistán", AL: "Albania", DZ: "Argelia", AD: "Andorra", AO: "Angola",
+  AG: "Antigua y Barbuda", AR: "Argentina", AM: "Armenia", AU: "Australia",
+  AT: "Austria", AZ: "Azerbaiyán", BS: "Bahamas", BH: "Baréin", BD: "Bangladés",
+  BB: "Barbados", BY: "Bielorrusia", BE: "Bélgica", BZ: "Belice", BJ: "Benín",
+  BT: "Bután", BO: "Bolivia", BA: "Bosnia y Herzegovina", BW: "Botsuana",
+  BR: "Brasil", BN: "Brunéi", BG: "Bulgaria", BF: "Burkina Faso", BI: "Burundi",
+  KH: "Camboya", CM: "Camerún", CA: "Canadá", CV: "Cabo Verde",
+  CF: "República Centroafricana", TD: "Chad", CL: "Chile", CN: "China",
+  CO: "Colombia", KM: "Comoras", CG: "Congo", CD: "República Democrática del Congo",
+  CR: "Costa Rica", CI: "Costa de Marfil", HR: "Croacia", CU: "Cuba",
+  CY: "Chipre", CZ: "República Checa", DK: "Dinamarca", DJ: "Yibuti",
+  DM: "Dominica", DO: "República Dominicana", EC: "Ecuador", EG: "Egipto",
+  SV: "El Salvador", GQ: "Guinea Ecuatorial", ER: "Eritrea", EE: "Estonia",
+  SZ: "Esuatini", ET: "Etiopía", FJ: "Fiyi", FI: "Finlandia", FR: "Francia",
+  GA: "Gabón", GM: "Gambia", GE: "Georgia", DE: "Alemania", GH: "Ghana",
+  GR: "Grecia", GD: "Granada", GT: "Guatemala", GN: "Guinea", GW: "Guinea-Bisáu",
+  GY: "Guyana", HT: "Haití", HN: "Honduras", HU: "Hungría", IS: "Islandia",
+  IN: "India", ID: "Indonesia", IR: "Irán", IQ: "Irak", IE: "Irlanda",
+  IL: "Israel", IT: "Italia", JM: "Jamaica", JP: "Japón", JO: "Jordania",
+  KZ: "Kazajistán", KE: "Kenia", KI: "Kiribati", KP: "Corea del Norte",
+  KR: "Corea del Sur", KW: "Kuwait", KG: "Kirguistán", LA: "Laos",
+  LV: "Letonia", LB: "Líbano", LS: "Lesoto", LR: "Liberia", LY: "Libia",
+  LI: "Liechtenstein", LT: "Lituania", LU: "Luxemburgo", MG: "Madagascar",
+  MW: "Malaui", MY: "Malasia", MV: "Maldivas", ML: "Malí", MT: "Malta",
+  MR: "Mauritania", MU: "Mauricio", MX: "México", MD: "Moldavia", MC: "Mónaco",
+  MN: "Mongolia", ME: "Montenegro", MA: "Marruecos", MZ: "Mozambique",
+  MM: "Myanmar", NA: "Namibia", NR: "Nauru", NP: "Nepal", NL: "Países Bajos",
+  NZ: "Nueva Zelanda", NI: "Nicaragua", NE: "Níger", NG: "Nigeria",
+  MK: "Macedonia del Norte", NO: "Noruega", OM: "Omán", PK: "Pakistán",
+  PW: "Palaos", PS: "Palestina", PA: "Panamá", PG: "Papúa Nueva Guinea",
+  PY: "Paraguay", PE: "Perú", PH: "Filipinas", PL: "Polonia", PT: "Portugal",
+  QA: "Catar", RO: "Rumania", RU: "Rusia", RW: "Ruanda", KN: "San Cristóbal y Nieves",
+  LC: "Santa Lucía", VC: "San Vicente y las Granadinas", WS: "Samoa",
+  SM: "San Marino", ST: "Santo Tomé y Príncipe", SA: "Arabia Saudita",
+  SN: "Senegal", RS: "Serbia", SC: "Seychelles", SL: "Sierra Leona",
+  SG: "Singapur", SK: "Eslovaquia", SI: "Eslovenia", SB: "Islas Salomón",
+  SO: "Somalia", ZA: "Sudáfrica", SS: "Sudán del Sur", ES: "España",
+  LK: "Sri Lanka", SD: "Sudán", SR: "Surinam", SE: "Suecia", CH: "Suiza",
+  SY: "Siria", TW: "Taiwán", TJ: "Tayikistán", TZ: "Tanzania", TH: "Tailandia",
+  TL: "Timor Oriental", TG: "Togo", TO: "Tonga", TT: "Trinidad y Tobago",
+  TN: "Túnez", TR: "Turquía", TM: "Turkmenistán", TV: "Tuvalu", UG: "Uganda",
+  UA: "Ucrania", AE: "Emiratos Árabes Unidos", GB: "Reino Unido",
+  US: "Estados Unidos", UY: "Uruguay", UZ: "Uzbekistán", VU: "Vanuatu",
+  VA: "Ciudad del Vaticano", VE: "Venezuela", VN: "Vietnam", YE: "Yemen",
+  ZM: "Zambia", ZW: "Zimbabue", GL: "Groenlandia", PR: "Puerto Rico",
+  NC: "Nueva Caledonia", PF: "Polinesia Francesa", EH: "Sáhara Occidental",
+  GF: "Guayana Francesa", SX: "Sint Maarten", XK: "Kosovo", SS: "Sudán del Sur",
+};
 function GlobeView(props) {
     const filtered = props.filtered, selectedId = props.selectedId, setSelectedId = props.setSelectedId,
         catById = props.catById, CATEGORIES = props.CATEGORIES, CITY_COORDS = props.CITY_COORDS,
@@ -23408,8 +23458,39 @@ function GlobeView(props) {
         backgroundSeries.data.push({ geometry: am5map.getGeoRectangle(90, 180, -90, -180) });
         const graticuleSeries = chart.series.push(am5map.GraticuleSeries.new(root, { step: 10 }));
         graticuleSeries.mapLines.template.setAll({ stroke: am5.color(PAPER), strokeOpacity: 0.08 });
+        // Preparamos el geoJSON antes de usarlo: nombres de países en español, y
+        // reemplazo de "Falkland Islands" por un polígono propio de las Islas
+        // Malvinas (territorio argentino), ya que la librería las trae con el
+        // nombre y la forma en inglés y las muestra como entidad aparte.
+        const worldData = am5geodata_worldLow;
+        if (worldData && worldData.features && !worldData.__esAplicado) {
+            worldData.__esAplicado = true;
+            worldData.features = worldData.features.filter((f) => {
+                const nm = (f.properties && f.properties.name) || "";
+                const code = f.id || (f.properties && f.properties.id) || "";
+                return code !== "FK" && !/falkland/i.test(nm);
+            });
+            worldData.features.forEach((f) => {
+                if (!f.properties) f.properties = {};
+                const code = f.id || f.properties.id || "";
+                const es = ES_COUNTRY_NAMES[code];
+                if (es) f.properties.name = es;
+            });
+            worldData.features.push({
+                type: "Feature",
+                id: "AR",
+                properties: { name: "Islas Malvinas" },
+                geometry: {
+                    type: "MultiPolygon",
+                    coordinates: [
+                        [[[-61.3, -51.3], [-60.9, -51.0], [-60.3, -51.05], [-59.85, -51.35], [-59.9, -51.65], [-60.3, -51.85], [-60.9, -51.9], [-61.3, -51.6], [-61.3, -51.3]]],
+                        [[[-59.75, -51.05], [-59.2, -51.0], [-58.5, -51.15], [-57.9, -51.4], [-57.75, -51.7], [-58.0, -51.85], [-58.3, -51.75], [-58.1, -52.0], [-58.4, -52.4], [-58.9, -52.35], [-59.1, -52.05], [-58.95, -51.75], [-59.3, -51.55], [-59.6, -51.3], [-59.75, -51.05]]],
+                    ],
+                },
+            });
+        }
         const polygonSeries = chart.series.push(am5map.MapPolygonSeries.new(root, {
-            geoJSON: am5geodata_worldLow,
+            geoJSON: worldData,
         }));
         polygonSeries.mapPolygons.template.setAll({
             tooltipText: "{name}",
@@ -23417,19 +23498,8 @@ function GlobeView(props) {
             fill: am5.color(COUNTRY),
             stroke: am5.color(INK),
             strokeWidth: 0.6,
-            toggleKey: "active",
-            cursorOverStyle: "pointer",
         });
-        polygonSeries.mapPolygons.template.states.create("hover", { fill: am5.color(COUNTRY_HOVER) });
-        polygonSeries.mapPolygons.template.states.create("active", { fill: am5.color(GOLD), fillOpacity: 1 });
-        polygonSeries.mapPolygons.template.on("active", (active, target) => {
-            if (active) {
-                polygonSeries.mapPolygons.each((pg) => {
-                    if (pg !== target && pg.get("active"))
-                        pg.set("active", false);
-                });
-            }
-        });
+        polygonSeries.mapPolygons.template.states.create("hover", { fill: am5.color(GOLD), fillOpacity: 1 });
         const zoomControl = chart.set("zoomControl", am5map.ZoomControl.new(root, {}));
         [zoomControl.plusButton, zoomControl.minusButton, zoomControl.homeButton].forEach((btn) => {
             if (!btn) return;
